@@ -124,7 +124,25 @@ void *mm_realloc(void *ptr, size_t size)
     return newptr;
 }
 
+//헬퍼함수 정의
+static void *extend_heap(size_t words) //free block를 만드는 함수
+{
+    char *bp;
+    size_t size;
 
+    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE; 
+    //블럭의 사이즈를 항상 8의 배수가 되게끔
+    if ((long)(bp = mem_sbrk(size)) == -1)
+        return NULL;
+
+    PUT(HDRP(bp), PACK(size,0)); //free block이니깐 alloc=0
+    PUT(FTRP(bp), PACK(size,0));
+    PUT(HDRP(NEXT_BLKP(bp)), PACK(0,1)); 
+    //새 epilogue header 생성, 기존의 epilogue자리에 새 free block이 들어감
+
+    return coalesce(bp);
+
+}
 
 
 
