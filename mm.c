@@ -157,12 +157,14 @@ void *mm_realloc(void *ptr, size_t size)
 {
     void *newptr;
     void *next_bp;
+    void *extend_bp;
     void *remainder_bp;
     size_t asize;
     size_t oldsize;
     size_t nextsize;
     size_t combined;
     size_t copySize;
+    size_t extendsize;
 
     if (ptr == NULL)
         return mm_malloc(size);
@@ -212,6 +214,32 @@ void *mm_realloc(void *ptr, size_t size)
 
             return ptr;
         }
+    }
+
+    if (GET_SIZE(HDRP(next_bp)) == 0) { //현재 블록이 힙 끝이라면 뒤로 힙을 늘려 제자리 확장 시도
+        extendsize = asize - oldsize;
+        extend_bp = extend_heap(extendsize / WSIZE);
+        if (extend_bp == NULL)
+            return NULL;
+
+        remove_free_block(extend_bp);
+        combined = oldsize + GET_SIZE(HDRP(extend_bp));
+
+        if ((combined - asize) >= MINBLOCKSIZE) {
+            PUT(HDRP(ptr), PACK(asize, 1));
+            PUT(FTRP(ptr), PACK(asize, 1));
+
+            remainder_bp = NEXT_BLKP(ptr);
+            PUT(HDRP(remainder_bp), PACK(combined - asize, 0));
+            PUT(FTRP(remainder_bp), PACK(combined - asize, 0));
+            insert_free_block(remainder_bp, combined - asize);
+        }
+        else {
+            PUT(HDRP(ptr), PACK(combined, 1));
+            PUT(FTRP(ptr), PACK(combined, 1));
+        }
+
+        return ptr;
     }
 
     newptr = mm_malloc(size); //제자리 확장이 안 될 경우, 기존 방식대로 새 블록 할당 후 복사
