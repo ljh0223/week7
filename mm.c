@@ -118,11 +118,17 @@ void mm_free(void *bp)
 void *mm_realloc(void *ptr, size_t size)
 {
     void *newptr;
+    void *prev_bp;
     void *next_bp;
+    void *split_bp;
     size_t asize;
     size_t oldsize;
+    size_t prevsize;
     size_t nextsize;
+    size_t combined;
     size_t copySize;
+    size_t prev_alloc;
+    size_t next_alloc;
 
     if (size == 0) { //해당 block을 free로 하라는 말
         mm_free(ptr);
@@ -144,20 +150,23 @@ void *mm_realloc(void *ptr, size_t size)
     if (asize <= oldsize)
         return ptr;
 
+    prev_bp = PREV_BLKP(ptr);
     // 다음 블록이 free이고 합치면 충분한 경우, 제자리 확장
     next_bp = NEXT_BLKP(ptr);
-    if (!GET_ALLOC(HDRP(next_bp))) {
-        nextsize = GET_SIZE(HDRP(next_bp));
-        if ((oldsize + nextsize) >= asize) {
-            size_t combined = oldsize + nextsize;
+    prev_alloc = GET_ALLOC(HDRP(prev_bp));
+    next_alloc = GET_ALLOC(HDRP(next_bp));
 
+    if (!next_alloc) {
+        nextsize = GET_SIZE(HDRP(next_bp));
+        combined = oldsize + nextsize;
+        if (combined >= asize) {
             if ((combined - asize) >= (2 * DSIZE)) {
                 PUT(HDRP(ptr), PACK(asize, 1));
                 PUT(FTRP(ptr), PACK(asize, 1));
 
-                next_bp = NEXT_BLKP(ptr);
-                PUT(HDRP(next_bp), PACK(combined - asize, 0));
-                PUT(FTRP(next_bp), PACK(combined - asize, 0));
+                split_bp = NEXT_BLKP(ptr);
+                PUT(HDRP(split_bp), PACK(combined - asize, 0));
+                PUT(FTRP(split_bp), PACK(combined - asize, 0));
             }
             else {
                 PUT(HDRP(ptr), PACK(combined, 1));
@@ -165,6 +174,54 @@ void *mm_realloc(void *ptr, size_t size)
             }
 
             return ptr;
+        }
+    }
+
+    if (!prev_alloc) {
+        prevsize = GET_SIZE(HDRP(prev_bp));
+        copySize = oldsize - DSIZE;
+
+        combined = prevsize + oldsize;
+        if (combined >= asize) {
+            memmove(prev_bp, ptr, copySize);
+
+            if ((combined - asize) >= (2 * DSIZE)) {
+                PUT(HDRP(prev_bp), PACK(asize, 1));
+                PUT(FTRP(prev_bp), PACK(asize, 1));
+
+                split_bp = NEXT_BLKP(prev_bp);
+                PUT(HDRP(split_bp), PACK(combined - asize, 0));
+                PUT(FTRP(split_bp), PACK(combined - asize, 0));
+            }
+            else {
+                PUT(HDRP(prev_bp), PACK(combined, 1));
+                PUT(FTRP(prev_bp), PACK(combined, 1));
+            }
+
+            return prev_bp;
+        }
+
+        if (!next_alloc) {
+            nextsize = GET_SIZE(HDRP(next_bp));
+            combined = prevsize + oldsize + nextsize;
+            if (combined >= asize) {
+                memmove(prev_bp, ptr, copySize);
+
+                if ((combined - asize) >= (2 * DSIZE)) {
+                    PUT(HDRP(prev_bp), PACK(asize, 1));
+                    PUT(FTRP(prev_bp), PACK(asize, 1));
+
+                    split_bp = NEXT_BLKP(prev_bp);
+                    PUT(HDRP(split_bp), PACK(combined - asize, 0));
+                    PUT(FTRP(split_bp), PACK(combined - asize, 0));
+                }
+                else {
+                    PUT(HDRP(prev_bp), PACK(combined, 1));
+                    PUT(FTRP(prev_bp), PACK(combined, 1));
+                }
+
+                return prev_bp;
+            }
         }
     }
 
