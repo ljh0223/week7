@@ -1,14 +1,3 @@
-/*
- * mm-naive.c - The fastest, least memory-efficient malloc package.
- * 
- * In this naive approach, a block is allocated by simply incrementing
- * the brk pointer.  A block is pure payload. There are no headers or
- * footers.  Blocks are never coalesced or reused. Realloc is
- * implemented directly using mm_malloc and mm_free.
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -24,11 +13,11 @@
  ********************************************************/
 team_t team = {
     /* Team name */
-    "ateam",
+    "team5",
     /* First member's full name */
-    "Harry Bovik",
+    "JAEHYEOK LEE",
     /* First member's email address */
-    "bovik@cs.cmu.edu",
+    "cncnvmvm@gmail.com",
     /* Second member's full name (leave blank if none) */
     "",
     /* Second member's email address (leave blank if none) */
@@ -128,10 +117,13 @@ void mm_free(void *bp)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
     void *newptr;
+    void *next_bp;
+    size_t asize;
+    size_t oldsize;
+    size_t nextsize;
     size_t copySize;
-    
+
     if (size == 0) { //해당 block을 free로 하라는 말
         mm_free(ptr);
         return NULL;
@@ -141,16 +133,51 @@ void *mm_realloc(void *ptr, size_t size)
         return mm_malloc(size);
     }
 
+    if (size <= DSIZE)
+        asize = 2 * DSIZE;
+    else
+        asize = DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
+
+    oldsize = GET_SIZE(HDRP(ptr));
+
+    // 이미 현재 블록이 충분히 크면 그대로 사용
+    if (asize <= oldsize)
+        return ptr;
+
+    // 다음 블록이 free이고 합치면 충분한 경우, 제자리 확장
+    next_bp = NEXT_BLKP(ptr);
+    if (!GET_ALLOC(HDRP(next_bp))) {
+        nextsize = GET_SIZE(HDRP(next_bp));
+        if ((oldsize + nextsize) >= asize) {
+            size_t combined = oldsize + nextsize;
+
+            if ((combined - asize) >= (2 * DSIZE)) {
+                PUT(HDRP(ptr), PACK(asize, 1));
+                PUT(FTRP(ptr), PACK(asize, 1));
+
+                next_bp = NEXT_BLKP(ptr);
+                PUT(HDRP(next_bp), PACK(combined - asize, 0));
+                PUT(FTRP(next_bp), PACK(combined - asize, 0));
+            }
+            else {
+                PUT(HDRP(ptr), PACK(combined, 1));
+                PUT(FTRP(ptr), PACK(combined, 1));
+            }
+
+            return ptr;
+        }
+    }
+
     newptr = mm_malloc(size);
     if (newptr == NULL) //만들어지지 않았으면 NULL반환
         return NULL;
 
-    copySize = GET_SIZE(HDRP(oldptr)) - DSIZE; //기존 block의 payload크기만큼만 복사
+    copySize = oldsize - DSIZE; //기존 block의 payload크기만큼만 복사
     if (size < copySize)
         copySize = size;
 
-    memcpy(newptr, oldptr, copySize); //기존 payload 데이터를 새 payload로 붙여넣기
-    mm_free(oldptr); //기존 block 할당 해제
+    memcpy(newptr, ptr, copySize); //기존 payload 데이터를 새 payload로 붙여넣기
+    mm_free(ptr); //기존 block 할당 해제
     return newptr;
 }
 
