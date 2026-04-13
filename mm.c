@@ -87,21 +87,40 @@ int mm_init(void)
  */
 void *mm_malloc(size_t size)
 {
-    int newsize = ALIGN(size + SIZE_T_SIZE);
-    void *p = mem_sbrk(newsize);
-    if (p == (void *)-1)
-	return NULL;
-    else {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
+    size_t asize;
+    size_t extendsize; //free block이 없을 때, 힙을 늘릴 크기
+    char *bp;
+
+    if (size==0)
+        return NULL;
+    if (size <= DSIZE)
+        asize = 2 * DSIZE;
+    else
+        asize = DSIZE * ((size + DSIZE + (DSIZE -1))/DSIZE); //8의 배수로 맞추는 과정
+
+    if ((bp = find_fit(asize)) != NULL) {
+        place(bp, asize);
+        return bp;
     }
+
+    extendsize = MAX(asize, CHUNKSIZE); //free block을 못찾았을 때 힙을 얼마나 늘릴지
+    if ((bp = extend_heap(extendsize / WSIZE)) == NULL) //byte로 넘기지 않고 word 개수로 바꿔서 extend_heap에 넘김
+        return NULL;
+    
+    place(bp, asize);
+    return bp;
 }
 
 /*
  * mm_free - Freeing a block does nothing.
  */
-void mm_free(void *ptr)
+void mm_free(void *bp)
 {
+    size_t size = GET_SIZE(HDRP(bp));
+
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+    coalesce(bp);
 }
 
 /*
@@ -113,14 +132,25 @@ void *mm_realloc(void *ptr, size_t size)
     void *newptr;
     size_t copySize;
     
+    if (size == 0) { //해당 block을 free로 하라는 말
+        mm_free(ptr);
+        return NULL;
+    }
+
+    if (ptr == NULL) { //블록이 없으니 새로 만들라는 말
+        return mm_malloc(size);
+    }
+
     newptr = mm_malloc(size);
-    if (newptr == NULL)
-      return NULL;
-    copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE);
+    if (newptr == NULL) //만들어지지 않았으면 NULL반환
+        return NULL;
+
+    copySize = GET_SIZE(HDRP(oldptr)) - DSIZE; //기존 block의 payload크기만큼만 복사
     if (size < copySize)
-      copySize = size;
-    memcpy(newptr, oldptr, copySize);
-    mm_free(oldptr);
+        copySize = size;
+
+    memcpy(newptr, oldptr, copySize); //기존 payload 데이터를 새 payload로 붙여넣기
+    mm_free(oldptr); //기존 block 할당 해제
     return newptr;
 }
 
@@ -156,7 +186,7 @@ static void *coalesce(void *bp)
     else if (prev_alloc && !next_alloc) {
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(bp), PACK(size,0));
-        PUT(PTRP(bp), PACK(size,0));
+        PUT(FTRP(bp), PACK(size,0));
     }
     else if (!prev_alloc && next_alloc) {
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
@@ -187,7 +217,22 @@ static void *find_fit(size_t asize) //first fit 구현
     return NULL;
 }
 
-
+static void place(void *bp, size_t asize)
+{
+    size_t csize = GET_SIZE(HDRP(bp));
+    
+    if ((csize - asize) >= (2 * DSIZE)){ //블럭의 최소 사이즈가 16이므로, 케이스를 나눔
+        PUT(HDRP(bp), PACK(asize, 1));
+        PUT(FTRP(bp), PACK(asize, 1));
+        bp = NEXT_BLKP(bp);
+        PUT(HDRP(bp), PACK(csize - asize, 0));
+        PUT(FTRP(bp), PACK(csize - asize, 0));
+    }
+    else { //최소 사이즈 보다 작을땐 그냥 그 블럭을 통째로 할당
+        PUT(HDRP(bp), PACK(csize, 1));
+        PUT(FTRP(bp), PACK(csize, 1));
+    }
+}
 
 
 
