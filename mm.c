@@ -41,9 +41,12 @@ team_t team = {
 #define WSIZE 4
 #define DSIZE 8
 #define CHUNKSIZE (1 << 12)
-#define LISTLIMIT 12
-#define PTRSIZE (sizeof(void *))
+#define LISTLIMIT 12 //프리블록 의 크기별 구간을 12개로 만들겠다
+#define PTRSIZE (sizeof(void *)) //포인터 하나의 크기=8로, freeblock안에 prev,next포인터를 넣어야해서.
 #define MINBLOCKSIZE (ALIGN(DSIZE + 2 * PTRSIZE))
+#define FIRST_FIT_POLICY 0
+#define NEXT_FIT_POLICY 1
+#define BEST_FIT_POLICY 2
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define PACK(size, alloc) ((size) | (alloc))
@@ -65,12 +68,18 @@ team_t team = {
 
 static char *heap_listp;
 static void *seg_free_lists[LISTLIMIT];
+static void *rover;
+static int rover_index;
+static int fit_policy = BEST_FIT_POLICY;
 
 static int get_list_index(size_t size);
 static void insert_free_block(void *bp, size_t size);
 static void remove_free_block(void *bp);
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
+static void *first_fit(size_t asize);
+static void *next_fit(size_t asize);
+static void *best_fit(size_t asize);
 static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
 
@@ -79,10 +88,13 @@ static void place(void *bp, size_t asize);
  */
 int mm_init(void)
 {
-    int i;
+    int i; //free list head 배열을 초기화하기 위해 반복 변수를 둔다
 
     for (i = 0; i < LISTLIMIT; i++)
         seg_free_lists[i] = NULL;
+
+    rover = NULL;
+    rover_index = 0;
 
     if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
         return -1;
@@ -113,7 +125,7 @@ void *mm_malloc(size_t size)
 
     asize = MAX(ALIGN(size + DSIZE), MINBLOCKSIZE);
 
-    if ((bp = find_fit(asize)) != NULL) {
+    if ((bp = find_fit(asize)) != NULL) { //힙 전체가 아니라, free list안에서 적당한 블록 탐색
         place(bp, asize);
         return bp;
     }
@@ -160,15 +172,15 @@ void *mm_realloc(void *ptr, size_t size)
         return NULL;
     }
 
-    asize = MAX(ALIGN(size + DSIZE), MINBLOCKSIZE);
-    oldsize = GET_SIZE(HDRP(ptr));
+    asize = MAX(ALIGN(size + DSIZE), MINBLOCKSIZE); //새로 필요한 블록 크기 계산
+    oldsize = GET_SIZE(HDRP(ptr)); //현재 블록 전체 크기 계산
 
-    if (asize <= oldsize) {
-        if ((oldsize - asize) >= MINBLOCKSIZE) {
+    if (asize <= oldsize) { //현재 블록의 크기가 충분히 
+        if ((oldsize - asize) >= MINBLOCKSIZE) { //split가능한지 판단
             PUT(HDRP(ptr), PACK(asize, 1));
             PUT(FTRP(ptr), PACK(asize, 1));
 
-            remainder_bp = NEXT_BLKP(ptr);
+            remainder_bp = NEXT_BLKP(ptr); //남는 부분을 free block으로
             PUT(HDRP(remainder_bp), PACK(oldsize - asize, 0));
             PUT(FTRP(remainder_bp), PACK(oldsize - asize, 0));
             coalesce(remainder_bp);
@@ -177,14 +189,14 @@ void *mm_realloc(void *ptr, size_t size)
     }
 
     next_bp = NEXT_BLKP(ptr);
-    if (!GET_ALLOC(HDRP(next_bp))) {
+    if (!GET_ALLOC(HDRP(next_bp))) { //다음 block이 free라면 합쳐서 제자리 확장이 가능한지 판단
         nextsize = GET_SIZE(HDRP(next_bp));
         combined = oldsize + nextsize;
 
         if (combined >= asize) {
             remove_free_block(next_bp);
 
-            if ((combined - asize) >= MINBLOCKSIZE) {
+            if ((combined - asize) >= MINBLOCKSIZE) { //합치고, split이 가능한지 확인
                 PUT(HDRP(ptr), PACK(asize, 1));
                 PUT(FTRP(ptr), PACK(asize, 1));
 
@@ -202,7 +214,7 @@ void *mm_realloc(void *ptr, size_t size)
         }
     }
 
-    newptr = mm_malloc(size);
+    newptr = mm_malloc(size); //제자리 확장이 안 될 경우, 기존 방식대로 새 블록 할당 후 복사
     if (newptr == NULL)
         return NULL;
 
@@ -245,6 +257,11 @@ static void insert_free_block(void *bp, size_t size)
 static void remove_free_block(void *bp)
 {
     int index = get_list_index(GET_SIZE(HDRP(bp)));
+
+    if (rover == bp) {
+        rover = SUCC(bp);
+        rover_index = index;
+    }
 
     if (PRED(bp) != NULL)
         SUCC(PRED(bp)) = SUCC(bp);
@@ -312,7 +329,7 @@ static void *coalesce(void *bp)
     return bp;
 }
 
-static void *find_fit(size_t asize)
+static void *first_fit(size_t asize)
 {
     void *bp;
     int index = get_list_index(asize);
@@ -325,6 +342,98 @@ static void *find_fit(size_t asize)
     }
 
     return NULL;
+}
+
+static void *next_fit(size_t asize)
+{
+    void *bp;
+    void *start_bp;
+    int base_index = get_list_index(asize);
+    int start_index;
+    int index;
+
+    if (rover != NULL && rover_index >= base_index) {
+        start_index = rover_index;
+        start_bp = rover;
+    }
+    else {
+        start_index = base_index;
+        start_bp = seg_free_lists[start_index];
+    }
+
+    for (index = start_index; index < LISTLIMIT; index++) {
+        bp = (index == start_index) ? start_bp : seg_free_lists[index];
+        for (; bp != NULL; bp = SUCC(bp)) {
+            if (asize <= GET_SIZE(HDRP(bp))) {
+                rover = SUCC(bp);
+                rover_index = index;
+                return bp;
+            }
+        }
+    }
+
+    for (index = base_index; index <= start_index; index++) {
+        bp = seg_free_lists[index];
+
+        if (index == start_index) {
+            for (; bp != NULL && bp != start_bp; bp = SUCC(bp)) {
+                if (asize <= GET_SIZE(HDRP(bp))) {
+                    rover = SUCC(bp);
+                    rover_index = index;
+                    return bp;
+                }
+            }
+        }
+        else {
+            for (; bp != NULL; bp = SUCC(bp)) {
+                if (asize <= GET_SIZE(HDRP(bp))) {
+                    rover = SUCC(bp);
+                    rover_index = index;
+                    return bp;
+                }
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static void *best_fit(size_t asize)
+{
+    void *bp;
+    void *best_bp = NULL;
+    size_t size;
+    size_t best_size = ~(size_t)0;
+    int index = get_list_index(asize);
+
+    for (; index < LISTLIMIT; index++) {
+        for (bp = seg_free_lists[index]; bp != NULL; bp = SUCC(bp)) {
+            size = GET_SIZE(HDRP(bp));
+
+            if (asize <= size && size < best_size) {
+                best_bp = bp;
+                best_size = size;
+
+                if (size == asize)
+                    return bp;
+            }
+        }
+
+        if (best_bp != NULL)
+            return best_bp;
+    }
+
+    return NULL;
+}
+
+static void *find_fit(size_t asize)
+{
+    if (fit_policy == NEXT_FIT_POLICY)
+        return next_fit(asize);
+    if (fit_policy == BEST_FIT_POLICY)
+        return best_fit(asize);
+
+    return first_fit(asize);
 }
 
 static void place(void *bp, size_t asize)
