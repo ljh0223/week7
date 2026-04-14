@@ -70,7 +70,7 @@ static char *heap_listp;
 static void *seg_free_lists[LISTLIMIT];
 static void *rover;
 static int rover_index;
-static int fit_policy = BEST_FIT_POLICY;
+static int fit_policy = FIRST_FIT_POLICY;
 
 static int get_list_index(size_t size);
 static void insert_free_block(void *bp, size_t size);
@@ -272,14 +272,24 @@ static void insert_free_block(void *bp, size_t size)
 {
     int index = get_list_index(size);
     void *head = seg_free_lists[index];
+    void *prev = NULL;
+    void *curr = head;
 
-    PRED(bp) = NULL;
-    SUCC(bp) = head;
+    while (curr != NULL && curr < bp) {
+        prev = curr;
+        curr = SUCC(curr);
+    }
 
-    if (head != NULL)
-        PRED(head) = bp;
+    PRED(bp) = prev;
+    SUCC(bp) = curr;
 
-    seg_free_lists[index] = bp;
+    if (prev != NULL)
+        SUCC(prev) = bp;
+    else
+        seg_free_lists[index] = bp;
+
+    if (curr != NULL)
+        PRED(curr) = bp;
 }
 
 static void remove_free_block(void *bp)
